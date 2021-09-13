@@ -1,0 +1,273 @@
+A_IN			BIT		P2.6
+B_IN			BIT		P2.7
+C_IN			BIT		P2.4
+BUZZER_PIN		BIT		P2.5
+
+COUNTER_BIT		BIT		20H.0
+BEEP_ON			BIT		20H.1
+	
+DISP_COUNTER	EQU		30H				;1 to keep track of the display no. to which data has been sent(0-5)
+DISP_DATA		EQU		31H				;6 bytes from 30H are used to store the hex values to be sent to P0 for the 6 displays(6 bytes)
+DISP_REG		EQU		37H				;6 keep track of the digits to be displayed on the 6 displays(6 bytes
+COUNT1			EQU		3DH				; 1
+DIGIT			EQU		3EH				; 1
+COUNTER_REG		EQU		3FH				; 3
+SEC_ONES		EQU		42H				; 2
+BUZ_COUNTER		EQU		44H
+
+
+CSEG
+		ORG		0000H
+		LJMP	MAIN
+
+		ORG		000BH
+		LJMP	ISR_T0
+
+		ORG		0030H					;bypass vector table
+MAIN:	CLR		BUZZER_PIN
+		CLR		BEEP_ON
+		MOV		BUZ_COUNTER,#0
+		CLR		A_IN
+		CLR		B_IN
+		SETB	C_IN
+		MOV		DISP_COUNTER,#0
+		MOV		P0,#0FFH
+		MOV		TMOD,#01H				;Timer0,Mode1(16-bit)
+		MOV		TH0,#0F8H				;load initial count value
+		MOV		TL0,#0CDH
+		MOV		IE,#82H					;enable Timer0 interrupt
+		SETB	TR0
+;------------starting of power on display sequence(scrolling of 0-9 once)----------------		
+LOOP001:MOV		DISP_REG,#0AH
+		MOV		DISP_REG+1,#0AH
+		MOV		DISP_REG+2,#0AH
+		MOV		DISP_REG+3,#0AH
+		MOV		DISP_REG+4,#0AH
+		MOV		DISP_REG+5,#0AH
+		LCALL	LOAD_DISP_DATA
+		LCALL	DELAY
+
+		MOV		DIGIT,#0
+REPEAT1:	
+		LCALL	SHIFT_DIGIT
+		MOV		DISP_REG,DIGIT
+		LCALL	LOAD_DISP_DATA
+		LCALL	DELAY
+		INC		DIGIT
+		MOV		A,DIGIT
+		CJNE	A,#10,REPEAT1
+
+		
+		MOV		R4,#6
+REPEAT2:
+		LCALL	SHIFT_DIGIT
+		MOV		DISP_REG,#0AH
+		LCALL	LOAD_DISP_DATA
+		LCALL	DELAY
+		DJNZ	R4,REPEAT2
+		
+		
+;--------starting of millisecond counter-----------
+		
+
+		MOV		COUNTER_REG,#0		;MSB
+		MOV		COUNTER_REG+1,#0
+		MOV		COUNTER_REG+2,#0	;LSB
+		LCALL	UNPACK_COUNT
+		LCALL	LOAD_DISP_DATA
+		ANL		DISP_DATA+3,#0BFH
+		MOV		SEC_ONES,#0
+		MOV		SEC_ONES+1,#0
+
+		CLR		COUNTER_BIT
+LOOP002:JNB		COUNTER_BIT,LOOP002
+		CLR		COUNTER_BIT
+		LCALL	UPDATE_COUNTER
+		LCALL	UNPACK_COUNT
+		LCALL	REMOVE_LEADING_ZEROS
+		LCALL	CHECK_SEC_DELAY
+		LCALL	LOAD_DISP_DATA
+		ANL		DISP_DATA+3,#0BFH
+		SJMP	LOOP002
+
+;-------------end of MAIN------------------
+
+REMOVE_LEADING_ZEROS:
+		MOV		R0,#DISP_REG+5
+LOOP080:MOV		A,@ R0
+		CJNE	A,#00,EXIT_SUBROUTINE
+		MOV		@ R0,#0AH
+		DEC		R0
+		CJNE	R0,#DISP_REG+3,LOOP080
+EXIT_SUBROUTINE:
+		RET
+		
+
+;------------------------------------------
+CHECK_SEC_DELAY:
+		MOV		A,SEC_ONES
+		CJNE	A,DISP_REG+3,LOOP081
+		RET
+LOOP081:
+		MOV		SEC_ONES,DISP_REG+3
+		SETB	BEEP_ON
+		RET
+;		MOV		A,SEC_ONES				;old value
+;		CJNE	A,DISP_REG+3,LOOP082	;new value
+;		MOV		A,SEC_ONES+1			;old value
+;		CJNE	A,DISP_REG+2,LOOP081	;new value
+;		RET
+;LOOP081:
+;		MOV		SEC_ONES+1,DISP_REG+2	;new value
+;		CLR		BUZZER_PIN
+;		RET	
+
+;LOOP082:
+;		MOV		SEC_ONES,DISP_REG+3		;new value
+;		MOV		SEC_ONES+1,DISP_REG+2	;new value
+;		SETB	BUZZER_PIN
+;		RET
+
+;------------------------------------------
+
+UNPACK_COUNT:
+		MOV		R0,#COUNTER_REG
+		MOV		R1,#DISP_REG+5
+LOOP090:MOV		A,@ R0
+		SWAP	A
+		ANL		A,#0FH
+		MOV		@ R1,A
+		DEC		R1
+		MOV		A,@ R0
+		ANL		A,#0FH
+		MOV		@ R1,A
+		DEC		R1
+		INC		R0
+		CJNE	R0,#COUNTER_REG+3,LOOP090
+		RET
+;---------------------------------------------
+UPDATE_COUNTER:
+		CLR		C
+		MOV		A,COUNTER_REG+2
+		ADDC	A,#1
+		DA		A
+		MOV		COUNTER_REG+2,A
+		MOV		A,COUNTER_REG+1
+		ADDC	A,#0
+		DA		A
+		MOV		COUNTER_REG+1,A
+		MOV		A,COUNTER_REG
+		ADDC	A,#0
+		DA		A
+		MOV		COUNTER_REG,A
+		RET
+
+;-----------------------------------------------
+
+SHIFT_DIGIT:
+		MOV		DISP_REG+5,DISP_REG+4
+		MOV		DISP_REG+4,DISP_REG+3
+		MOV		DISP_REG+3,DISP_REG+2
+		MOV		DISP_REG+2,DISP_REG+1
+		MOV		DISP_REG+1,DISP_REG
+		RET
+
+DELAY:	MOV		R5,#5
+LOOP100:MOV		R6,#0
+LOOP101:MOV		R7,#0
+LOOP102:DJNZ	R7,LOOP102
+		DJNZ	R6,LOOP101
+		DJNZ	R5,LOOP100
+		RET
+;------------------------------------------
+
+
+LOAD_DISP_DATA:
+		MOV		R0,#DISP_DATA
+		MOV		R1,#DISP_REG
+		MOV		DPTR,#TABLE2
+LOOP110:MOV		A,@ R1
+		MOVC	A,@ A+DPTR				;A contains the hex databyte that is to be loaded in disp_data space location
+		MOV		@ R0,A					;perform loading disp_data location using Table2 data and disp_reg 
+		INC		R0
+		INC		R1
+		CJNE	R1,#DISP_REG+6,LOOP110
+		RET
+;----------------------------------------------					
+					
+ISR_T0:		PUSH	PSW
+			PUSH	ACC
+			CLR		TF0						;clear Timer0 flag bit
+			MOV		TH0,#0F8H
+			MOV		TL0,#0CDH
+			SETB	COUNTER_BIT				
+			LCALL	DISPLAY_ROUTINE
+			LCALL	BUZZER_SERVICE
+EXIT_ISR:	POP		ACC
+			POP		PSW
+			RETI					
+;---------------------------------------------
+BUZZER_SERVICE:
+			JNB		BEEP_ON,RESET_BUZZER_SERVICE
+			SETB	BUZZER_PIN
+			DJNZ	BUZ_COUNTER,EXIT_BUZZER_SERVICE
+			CLR		BUZZER_PIN
+			CLR		BEEP_ON
+RESET_BUZZER_SERVICE:			
+			MOV		BUZ_COUNTER,#40
+EXIT_BUZZER_SERVICE:
+			RET
+
+;---------------------------------------------
+
+DISPLAY_ROUTINE:
+			PUSH	00H
+			PUSH	01H
+			PUSH	05H
+			MOV		P0,#0FFH				;0FF
+			LCALL	TO_BIN
+			MOV 	A,#DISP_DATA
+			ADD		A,DISP_COUNTER
+			MOV		R0,A
+			MOV		P0,@ R0
+			INC		DISP_COUNTER
+			MOV		A,DISP_COUNTER
+			CJNE	A,#6,EXIT_DISPLAY_ROUTINE
+			MOV		DISP_COUNTER,#0H
+EXIT_DISPLAY_ROUTINE:
+			POP		05H
+			POP		01H
+			POP		00H
+			RET
+
+;-----------------------------------------------
+TO_BIN:	CLR		A_IN			;initially set the decoder's inputs to 0
+		CLR		B_IN
+		CLR		C_IN
+		MOV		R5,DISP_COUNTER
+		INC		R5
+		MOV		A,R5			;make A=R5
+		MOV		B,#2			;base 2 since we want to convert to binary
+		DIV		AB				;perform A/B, quotient and remainder stored in A and B resp.
+		MOV		R1,A			;temporarily store A in R1
+		MOV		A,B				;copy B in A for some computation
+		CJNE	A,#1,NEXT1		;if A not equals 1,jump to NEXT1(A here has a copy of B)
+		SETB	A_IN			;if A=1 then make a=1 as well(A here has a copy of B)
+NEXT1:	MOV		B,#2			;load base 2 again
+		MOV		A,R1			;load back the original value into A
+		DIV		AB				;perform A/B, quotient and remainder stored in A and B resp.
+		MOV		R1,A			;temporarily store A in R1
+		MOV		A,B				;copy B in A for some computation
+		CJNE	A,#1,NEXT2		;if A not equals 1,jump to NEXT2(A here has a copy of B)
+		SETB	B_IN			;if A=1 then make b=1 as well(A here has a copy of B)
+NEXT2:	MOV		A,R1			;load back the original value into A
+		CJNE	A,#1,NEXT3		;if A not euals 1,jump to NEXT3
+		SETB	C_IN			;if A=1 then make c=1 as well
+NEXT3:	RET						;return from subroutine
+
+
+;------------------------------------------------
+
+TABLE2:				DB	44H,7DH,0C8H,68H,71H,62H,42H,07CH,40H,70H,0FFH	;hex values to be sent to seven segment display for displaying digits 0-9
+
+					END
